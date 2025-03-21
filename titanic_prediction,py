@@ -1,0 +1,101 @@
+# Install required libraries
+!pip install -q scikit-learn
+
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from IPython.display import clear_output
+
+# Load dataset
+dftrain = pd.read_csv('https://storage.googleapis.com/tf-datasets/titanic/train.csv')
+dfeval = pd.read_csv('https://storage.googleapis.com/tf-datasets/titanic/eval.csv')
+y_train = dftrain.pop('survived')
+y_eval = dfeval.pop('survived')
+
+# Define categorical and numeric columns
+CATEGORICAL_COLUMNS = ['sex', 'n_siblings_spouses', 'parch', 'class', 'deck', 'embark_town', 'alone']
+NUMERIC_COLUMNS = ['age', 'fare']
+
+# Function to preprocess data (one-hot encoding categorical variables)
+def preprocess_data(df, categorical_cols, numeric_cols, reference_cols=None):
+    processed_features = []
+
+    # One-hot encode categorical columns
+    for col in categorical_cols:
+        dummies = pd.get_dummies(df[col], prefix=col, dtype=np.float32)
+        processed_features.extend(dummies.columns)
+        df = pd.concat([df, dummies], axis=1)
+        df.drop(col, axis=1, inplace=True)
+
+    # Include numeric columns
+    for col in numeric_cols:
+        processed_features.append(col)
+
+    # Ensure evaluation data has the same columns as training data
+    if reference_cols is not None:
+        for col in reference_cols:
+            if col not in df.columns:
+                df[col] = 0  # Add missing columns with default value 0
+        df = df[reference_cols]  # Maintain column order
+
+    return df, processed_features
+
+# Preprocess training data
+dftrain, processed_features = preprocess_data(dftrain, CATEGORICAL_COLUMNS, NUMERIC_COLUMNS)
+
+# Preprocess evaluation data, ensuring it has the same feature set as training
+dfeval, _ = preprocess_data(dfeval, CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, reference_cols=processed_features)
+
+# Standardize numeric features
+scaler = StandardScaler()
+dftrain[NUMERIC_COLUMNS] = scaler.fit_transform(dftrain[NUMERIC_COLUMNS])
+dfeval[NUMERIC_COLUMNS] = scaler.transform(dfeval[NUMERIC_COLUMNS])
+
+# Convert to numpy arrays
+X_train = dftrain[processed_features].values.astype(np.float32)
+X_eval = dfeval[processed_features].values.astype(np.float32)
+y_train = y_train.values.astype(np.float32).reshape(-1, 1)  # Ensure shape (batch_size, 1)
+y_eval = y_eval.values.astype(np.float32).reshape(-1, 1)
+
+# Split training data into train and validation sets
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+
+# Define a more accurate Deep Neural Network model
+model = keras.Sequential([
+    layers.Dense(32, activation='relu', input_shape=(X_train.shape[1],)),  # First hidden layer
+    layers.BatchNormalization(),  # Normalize activations
+    layers.Dropout(0.3),  # Dropout to prevent overfitting
+
+    layers.Dense(16, activation='relu'),  # Second hidden layer
+    layers.BatchNormalization(),
+    layers.Dropout(0.2),
+
+    layers.Dense(8, activation='relu'),  # Third hidden layer
+
+    layers.Dense(1, activation='sigmoid')  # Output layer (binary classification)
+])
+
+# Compile the model with an improved optimizer and learning rate decay
+optimizer = keras.optimizers.Adam(learning_rate=0.01)
+lr_schedule = keras.callbacks.LearningRateScheduler(lambda epoch: 0.01 * 0.95 ** epoch)  # Decay learning rate
+
+model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=['accuracy'])
+
+# Train the model with early stopping
+early_stopping = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
+                    epochs=200, batch_size=32, verbose=1,
+                    callbacks=[early_stopping, lr_schedule])
+
+# Evaluate the model on test data
+loss, accuracy = model.evaluate(X_eval, y_eval, verbose=0)
+
+# Clear output and print accuracy
+clear_output()
+print(f"Test Accuracy: {accuracy:.4f}")
